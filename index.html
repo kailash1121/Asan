@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>आसान एप</title>
+
+<style>
+body { font-family:sans-serif; margin:0; background:#fff; }
+header { display:flex; justify-content:space-between; align-items:center; padding:10px; background:#FF7A00; color:#fff; }
+.logo { height:40px; }
+.wallet { font-size:14px; }
+button { padding:10px; border-radius:8px; border:none; cursor:pointer; margin:5px; }
+.orange-btn { background-color:#FF7A00; color:#fff; }
+.green-btn { background-color:#00A651; color:#fff; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px; }
+.grid-item { background:#fff; text-align:center; padding:20px; border-radius:10px; box-shadow:0 2px 5px rgba(0,0,0,0.2); }
+.chat-box { max-height:200px; overflow-y:auto; border:1px solid #ccc; padding:5px; margin:5px; }
+input[type=text] { width:70%; padding:5px; }
+.background-banner { width:100%; height:auto; border-radius:10px; }
+</style>
+
+<link rel="manifest" href="manifest.json">
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<!-- Lottie -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.10.1/lottie.min.js"></script>
+</head>
+<body>
+
+<header>
+<img src="assets/images/logo.png" alt="AA Logo" class="logo">
+<div class="wallet">Wallet: <span id="coin-balance">0</span> आसान कॉइन</div>
+</header>
+
+<main id="app"></main>
+<div id="recaptcha-container"></div>
+
+<script>
+// Firebase config
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "SENDER_ID",
+  appId: "APP_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// --- Auth ---
+function sendOTP(phone){
+  const appVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container',{size:'invisible'});
+  auth.signInWithPhoneNumber(phone, appVerifier)
+      .then(confirmationResult => { window.confirmationResult = confirmationResult; alert("OTP Sent!"); })
+      .catch(err=>console.log(err));
+}
+
+function verifyOTP(otp){
+  window.confirmationResult.confirm(otp).then(res=>{
+    const user = res.user;
+    alert("Login successful!");
+    db.collection("users").doc(user.uid).set({
+      uid: user.uid,
+      phone: user.phone,
+      coins:500, // initial coins
+      district:"Chamoli",
+      role:"customer",
+      verified:true
+    }, {merge:true});
+    renderHome();
+    updateWalletDisplay(user.uid);
+  }).catch(err=>alert("Invalid OTP"));
+}
+
+// --- Wallet ---
+function updateWalletDisplay(uid){
+  db.collection("users").doc(uid).onSnapshot(doc=>{
+    document.getElementById('coin-balance').innerText = doc.data().coins;
+  });
+}
+
+function addCoins(uid, amount){
+  db.collection("users").doc(uid).update({
+    coins: firebase.firestore.FieldValue.increment(amount)
+  });
+  db.collection("transactions").add({
+    user_uid: uid,
+    type: "add_coin",
+    coins: amount,
+    date: new Date(),
+    status: "success"
+  });
+  alert(amount + " coins added!");
+}
+
+// --- Home & Category ---
+function renderHome(){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h2>क्या करना चाहते हैं? / What do you want?</h2>
+    <button class="orange-btn" onclick="renderCategory()">Service Book करें</button>
+    <button class="green-btn" onclick="renderWallet()">Wallet / Coins</button>
+  `;
+}
+
+function renderCategory(){
+  const categories = [
+    {name_hi:"बैंड / बाजा / ढोल", name_en:"Band / Dhol", icon:"🎺", banner:"assets/images/banner_band.png"},
+    {name_hi:"शादी गाड़ियाँ", name_en:"Marriage Car", icon:"🚗", banner:"assets/images/banner_car.png"},
+    {name_hi:"DJ / टेंट", name_en:"DJ / Tent", icon:"🎧", banner:"assets/images/banner_dj.png"},
+    {name_hi:"टेंट / शादी हॉल", name_en:"Tent / Marriage Hall", icon:"🎪", banner:"assets/images/banner_tent.png"}
+  ];
+
+  let html = `<h2>कौन सी सर्विस चाहिए? / Which Service you want?</h2><div class="grid">`;
+  categories.forEach(cat=>{
+    html += `<div class="grid-item" onclick="renderProviders('${cat.name_hi}')">
+      <img src="${cat.banner}" class="background-banner"><br>${cat.icon}<br>${cat.name_hi}<br><small>${cat.name_en}</small></div>`;
+  });
+  html += `</div>`;
+  document.getElementById('app').innerHTML = html;
+}
+
+// --- Providers Multi-District ---
+const providers = [
+  {uid:"prov1",name:"Ram Band",category:"बैंड / बाजा / ढोल",district:"Chamoli",coins_earned:150,verified:true},
+  {uid:"prov2",name:"Shyam Tent & DJ",category:"DJ / टेंट",district:"Chamoli",coins_earned:200,verified:true},
+  {uid:"prov3",name:"Ramesh Car Rentals",category:"शादी गाड़ियाँ",district:"Rudraprayag",coins_earned:300,verified:true}
+];
+
+function renderProviders(category){
+  const user = auth.currentUser;
+  if(!user) return alert("Login first!");
+  db.collection("users").doc(user.uid).get().then(doc=>{
+    const district = doc.data().district;
+    const filtered = providers.filter(p=>p.category===category && p.district===district);
+    let html = `<h2>Providers (${category}) in ${district}</h2>`;
+    filtered.forEach(p=>{
+      html += `<div class="grid-item">
+        ${p.name}<br>
+        Coins Earned: ${p.coins_earned}<br>
+        <button class="orange-btn" onclick="bookService('${p.uid}','${p.name}','${category}')">Book Service (-15 Coins)</button>
+        <button class="green-btn" onclick="openChat('${p.uid}','${p.name}')">Chat</button>
+      </div>`;
+    });
+    document.getElementById('app').innerHTML = html;
+  });
+}
+
+// --- Booking + Celebration Animation ---
+function bookService(providerId, providerName, service){
+  const user = auth.currentUser;
+  if(!user) return alert("Login first!");
+  const coinsRequired = 15;
+  const userRef = db.collection("users").doc(user.uid);
+  userRef.get().then(doc=>{
+    if(doc.data().coins < coinsRequired) return alert("Insufficient coins");
+    userRef.update({coins: firebase.firestore.FieldValue.increment(-coinsRequired)});
+    db.collection("bookings").add({
+      customer_uid:user.uid,
+      provider_uid:providerId,
+      service:service,
+      date:new Date().toISOString().split('T')[0],
+      time:new Date().toTimeString().split(' ')[0],
+      coins:coinsRequired,
+      status:"pending"
+    });
+    db.collection("transactions").add({
+      user_uid:user.uid,
+      type:"booking",
+      coins:coinsRequired,
+      date:new Date(),
+      status:"success"
+    });
+    alert("Booking successful! 15 coins deducted");
+
+    // Lottie Celebration
+    const div = document.createElement("div");
+    div.style.position="fixed"; div.style.top=0; div.style.left=0;
+    div.style.width="100%"; div.style.height="100%"; div.style.background="rgba(0,0,0,0.5)";
+    div.id="lottieDiv"; document.body.appendChild(div);
+    lottie.loadAnimation({
+      container: div,
+      renderer: 'svg',
+      loop: false,
+      autoplay: true,
+      path: 'assets/animations/celebration.json'
+    });
+    setTimeout(()=>document.body.removeChild(div),3000);
+  });
+}
+
+// --- Wallet ---
+function renderWallet(){
+  const user = auth.currentUser;
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h2>Wallet / Coins</h2>
+    <div>Balance: <span id="wallet-balance"></span> Coins</div>
+    <input type="text" id="addCoinsInput" placeholder="Enter coins to add">
+    <button onclick="addCoins(auth.currentUser.uid, parseInt(document.getElementById('addCoinsInput').value))">Add Coins</button>
+  `;
+  updateWalletDisplay(user.uid);
+}
+
+// --- Chat ---
+function openChat(providerId, providerName){
+  const user = auth.currentUser;
+  const chatId = [user.uid, providerId].sort().join("_");
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h2>Chat with ${providerName}</h2>
+    <div class="chat-box" id="chatBox"></div>
+    <input type="text" id="chatInput" placeholder="Type message...">
+    <button onclick="sendMessageUI('${chatId}')">Send</button>
+    <button onclick="renderHome()">Back</button>
+  `;
+  listenMessages(chatId);
+}
+
+function sendMessageUI(chatId){
+  const text = document.getElementById('chatInput').value;
+  if(text.trim()==="") return;
+  sendMessage(chatId,text);
+  document.getElementById('chatInput').value="";
+}
+
+function sendMessage(chatId,text){
+  const user = auth.currentUser;
+  db.collection("chat").doc(chatId).collection("messages").add({
+    sender:user.uid,
+    text:text,
+    time:new Date()
+  });
+}
+
+function listenMessages(chatId){
+  const chatBox = document.getElementById('chatBox');
+  db.collection("chat").doc(chatId).collection("messages").orderBy("time").onSnapshot(snapshot=>{
+    chatBox.innerHTML="";
+    snapshot.docs.forEach(doc=>{
+      const msg = doc.data();
+      chatBox.innerHTML += `<div><b>${msg.sender===auth.currentUser.uid?"You":msg.sender}</b>: ${msg.text}</div>`;
+    });
+    chatBox.scrollTop = chatBox.scrollHeight;
+  });
+}
+
+// --- Service Worker Cache ---
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('service-worker.js')
+    .then(()=>console.log("
